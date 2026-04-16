@@ -1,9 +1,8 @@
 import os
-from dotenv import load_dotenv
-
-load_dotenv()
+import os
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+print(f"TELEGRAM_TOKEN loaded: {TELEGRAM_TOKEN is not None}")
 RAPIDAPI_KEY = os.getenv("RAPIDAPI_KEY")
 RAPIDAPI_HOST = os.getenv("RAPIDAPI_HOST")
 
