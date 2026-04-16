@@ -1,17 +1,18 @@
 import asyncio
 import logging
 import os
-print("=== ALL ENVIRONMENT VARIABLES ===")
-for key, value in os.environ.items():
-    if 'TOKEN' in key or 'API' in key:
-        print(f"{key}={value[:10]}...")
-print("=================================")
+from collections import defaultdict
+from time import time
 from typing import Optional
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.request import HTTPXRequest
 from gmailnator_client import GmailnatorClient
 from config import TELEGRAM_TOKEN, RAPIDAPI_KEY, RAPIDAPI_HOST, CHECK_ATTEMPTS, CHECK_INTERVAL_FIRST, CHECK_INTERVAL_SECOND
+
+# === Rate limiting ===
+user_last_request = defaultdict(float)
+RATE_LIMIT_SECONDS = 5  # минимальный интервал между запросами от одного пользователя
 
 # Настройка таймаутов для запросов к Telegram
 request_kwargs = {
@@ -30,12 +31,14 @@ logger = logging.getLogger(__name__)
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
-
 class FacebookCodeBot:
     def __init__(self):
         self.client = GmailnatorClient(RAPIDAPI_KEY, RAPIDAPI_HOST)
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if not self._check_rate_limit(user_id, update):
+            return
         await update.message.reply_text(
             "🔐 *Uniacc Facebook Code Bot*\n\n"
             "I help you get verification codes from Facebook.\n\n"
@@ -52,11 +55,37 @@ class FacebookCodeBot:
             parse_mode='Markdown'
         )
 
-    async def handle_email(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        """Handle email to search for verification code"""
-        email = update.message.text.strip()
+    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if not self._check_rate_limit(user_id, update):
+            return
+        await update.message.reply_text(
+            "📚 *Help & Instructions*\n\n"
+            "*How to get a verification code:*\n\n"
+            "1. Request a verification code from Facebook\n"
+            "2. Facebook will send an email with subject \"Verify your business email\"\n"
+            "3. Copy the email address and send it to me\n"
+            "4. I'll find the 6-digit code and send it to you\n\n"
+            f"*Limitations:*\n"
+            f"• {CHECK_ATTEMPTS} checks (at {CHECK_INTERVAL_FIRST} and {CHECK_INTERVAL_FIRST + CHECK_INTERVAL_SECOND} seconds)\n"
+            f"• Works only with emails from Facebook\n\n"
+            "*Commands:*\n"
+            "/start - Start the bot\n"
+            "/help - Show this help message\n\n"
+            "Need help? @Uniacc\\_store",
+            parse_mode='Markdown'
+        )
 
-        # Validate email
+    async def handle_emails(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
+        user_id = update.effective_user.id
+        if not self._check_rate_limit(user_id, update):
+            return
+        text = update.message.text.strip()
+        await self.handle_email(update, text)
+
+    async def handle_email(self, update: Update, text: str):
+        email = text.strip()
+
         if '@' not in email or '.' not in email:
             await update.message.reply_text(
                 "❌ Please send a valid email address.\n\n"
@@ -73,7 +102,6 @@ class FacebookCodeBot:
         )
 
         try:
-            # Search for verification code
             verification_code = await asyncio.to_thread(
                 self.client.find_verification_code,
                 email=email,
@@ -99,7 +127,6 @@ class FacebookCodeBot:
                     f"• Check the email address is correct",
                     parse_mode='Markdown'
                 )
-
         except Exception as e:
             logger.error(f"Error processing {email}: {e}")
             await status_msg.edit_text(
@@ -109,24 +136,19 @@ class FacebookCodeBot:
                 parse_mode='Markdown'
             )
 
-    async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
-        await update.message.reply_text(
-            "📚 *Help & Instructions*\n\n"
-            "*How to get a verification code:*\n\n"
-            "1. Request a verification code from Facebook\n"
-            "2. Facebook will send an email with subject \"Verify your business email\"\n"
-            "3. Copy the email address and send it to me\n"
-            "4. I'll find the 6-digit code and send it to you\n\n"
-            f"*Limitations:*\n"
-            f"• {CHECK_ATTEMPTS} checks (at {CHECK_INTERVAL_FIRST} and {CHECK_INTERVAL_FIRST + CHECK_INTERVAL_SECOND} seconds)\n"
-            f"• Works only with emails from Facebook\n\n"
-            "*Commands:*\n"
-            "/start - Start the bot\n"
-            "/help - Show this help message\n\n"
-            "Need help? @Uniacc\\_store",
-            parse_mode='Markdown'
-        )
-
+    def _check_rate_limit(self, user_id: int, update: Update) -> bool:
+        now = time()
+        last = user_last_request[user_id]
+        if now - last < RATE_LIMIT_SECONDS:
+            wait = int(RATE_LIMIT_SECONDS - (now - last)) + 1
+            asyncio.create_task(
+                update.message.reply_text(
+                    f"⏳ Please wait {wait} seconds before sending another request."
+                )
+            )
+            return False
+        user_last_request[user_id] = now
+        return True
 
 def main():
     if not TELEGRAM_TOKEN:
@@ -136,18 +158,17 @@ def main():
     print("🤖 Starting Facebook Code Bot...")
     print("✅ Gmailnator client ready")
     print(f"⚙️ Settings: {CHECK_ATTEMPTS} checks (at {CHECK_INTERVAL_FIRST} and {CHECK_INTERVAL_FIRST + CHECK_INTERVAL_SECOND} seconds)")
+    print("📌 Rate limiting: 5 seconds between requests per user")
 
     bot = FacebookCodeBot()
     app = Application.builder().token(TELEGRAM_TOKEN).request(request).build()
 
     app.add_handler(CommandHandler("start", bot.start))
     app.add_handler(CommandHandler("help", bot.help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_email))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, bot.handle_emails))
 
     print("✅ Bot is running and ready!")
-    print("📌 Waiting for emails to search for verification codes")
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
