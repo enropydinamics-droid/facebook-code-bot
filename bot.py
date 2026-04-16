@@ -1,5 +1,11 @@
 import asyncio
 import logging
+import os
+print("=== ALL ENVIRONMENT VARIABLES ===")
+for key, value in os.environ.items():
+    if 'TOKEN' in key or 'API' in key:
+        print(f"{key}={value[:10]}...")
+print("=================================")
 from typing import Optional
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
